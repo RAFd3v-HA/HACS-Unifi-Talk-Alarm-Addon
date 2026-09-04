@@ -1,0 +1,11 @@
+#!/usr/bin/with-contenv bashio
+set -Eeuo pipefail
+
+umask 077
+
+if [[ ! -r /data/options.json ]]; then
+    bashio::exit.nok "Supervisor options are unavailable at /data/options.json"
+fi
+
+cd /app
+exec python3 -m talk_alarm
