@@ -44,7 +44,7 @@ async def test_health_requires_constant_bearer_boundary(
             "api_version": "1",
             "service": {
                 "name": "unifi-talk-alarm-sidecar",
-                "version": "0.1.2",
+                "version": "0.1.3",
             },
         }
     finally:

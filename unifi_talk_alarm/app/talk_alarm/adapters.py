@@ -352,9 +352,9 @@ class BaresipCtrlTcpAdapter(SipAdapter):
             self._last_failure_reason = None
             await self._emit(AdapterEventType.CALL_CLOSED, reason)
 
-        lower = line.lower()
+        lower = line.lower().strip()
         if (
-            ("aufile" in lower and ("end of file" in lower or " eof" in lower))
+            lower == "aufile: end of file"
             or "audio_eof" in lower
             or "end_of_file" in lower
         ):

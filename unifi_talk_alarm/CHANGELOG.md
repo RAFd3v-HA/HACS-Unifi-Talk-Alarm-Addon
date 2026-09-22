@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.3
+
+- Fixed alarm audio ending before playback by distinguishing Baresip's WAV
+  preload marker from the actual end-of-file event.
+
 ## 0.1.2
 
 - Fixed Baresip module discovery on the Debian add-on image so the SIP client,

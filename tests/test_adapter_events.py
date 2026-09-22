@@ -8,6 +8,9 @@ from pathlib import Path
 
 from talk_alarm.adapters import AdapterEventType, BaresipCtrlTcpAdapter
 from talk_alarm.config import AppConfig
+from talk_alarm.manager import CallManager
+
+from fakes import FakeAudioProvider
 
 
 async def test_official_ctrl_tcp_event_objects_are_parsed(app_config: AppConfig) -> None:
@@ -43,6 +46,61 @@ async def test_official_ctrl_tcp_event_objects_are_parsed(app_config: AppConfig)
     assert events[-1].reason == "busy"
     if adapter._event_task is not None:
         adapter._event_task.cancel()
+
+
+async def test_aufile_preload_is_not_mistaken_for_playback_eof(
+    app_config: AppConfig,
+) -> None:
+    """Loading a WAV to memory must not hang up before playback starts."""
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    events = []
+
+    async def collect(event):
+        events.append(event)
+
+    adapter.set_event_handler(collect)
+
+    await adapter._parse_line("aufile: read end of file\n")
+    assert events == []
+
+    await adapter._parse_line("aufile: end of file\n")
+    assert [event.type for event in events] == [AdapterEventType.AUDIO_EOF]
+
+
+async def test_aufile_preload_keeps_connected_call_alive(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    """The source preload marker must not hang up an established call."""
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    commands: list[tuple[str, str]] = []
+
+    async def command(name: str, params: str = "") -> dict:
+        commands.append((name, params))
+        return {"response": True, "ok": True, "data": ""}
+
+    adapter._command = command
+    manager = CallManager(
+        app_config, adapter, FakeAudioProvider(tmp_path, duration=60.0)
+    )
+    try:
+        await manager.start_call(
+            number="150", message="Alarm", audio_url=None, ring_timeout=30
+        )
+        await adapter._parse_line("CALL_ESTABLISHED\n")
+        _, call = await manager.status()
+        assert call.state == "connected"
+
+        await adapter._parse_line("aufile: read end of file\n")
+        _, call = await manager.status()
+        assert call.state == "connected"
+        assert [name for name, _ in commands].count("hangup") == 0
+
+        await adapter._parse_line("aufile: end of file\n")
+        _, call = await manager.status()
+        assert call.state == "ending"
+        assert [name for name, _ in commands].count("hangup") == 1
+    finally:
+        await manager.shutdown()
 
 
 async def test_generated_baresip_configuration_is_single_call_and_ephemeral(
