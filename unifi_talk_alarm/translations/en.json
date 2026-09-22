@@ -1,0 +1,84 @@
+{
+  "configuration": {
+    "sip_server": {
+      "name": "SIP Server Host",
+      "description": "1. In UniFi Talk, open Talk > Phones > Add Third-Party Device > Overview. Copy SIP Server Host exactly as shown. Do not use a SIP Trunk Provider value."
+    },
+    "sip_port": {
+      "name": "SIP Server Port",
+      "description": "2. In the same Talk > Phones > Add Third-Party Device > Overview screen, copy SIP Server Port exactly as shown."
+    },
+    "sip_extension": {
+      "name": "SIP Username",
+      "description": "3. In the same Talk > Phones > Add Third-Party Device > Overview screen, copy SIP Username exactly as shown. This is not the SIP Trunk Provider field Auth Username."
+    },
+    "sip_password": {
+      "name": "SIP Password",
+      "description": "4. In the same Talk > Phones > Add Third-Party Device > Overview screen, copy SIP Password exactly as shown. This is not the SIP Trunk Provider Password."
+    },
+    "sip_transport": {
+      "name": "SIP Transport",
+      "description": "Transport for the dedicated Third-Party Device registration. Keep udp unless separate, verified device instructions require tcp or tls. Do not derive this from a SIP Trunk Provider configuration."
+    },
+    "outbound_proxy": {
+      "name": "Outbound Proxy",
+      "description": "Optional full sip: or sips: proxy URI for the dedicated Third-Party Device. Normally leave this empty. Never copy the SIP Trunk Provider fields SIP Proxy or Realm here."
+    },
+    "api_token": {
+      "name": "API Token (create it yourself)",
+      "description": "Create this private token yourself and share it only with the Home Assistant integration. It does not come from UniFi Talk. Use 32-512 non-whitespace characters; a 64-character random hex token is recommended."
+    },
+    "api_port": {
+      "name": "Local API Port",
+      "description": "Loopback-only port used by the Home Assistant integration to reach this add-on. Keep 8099 unless that port is already in use."
+    },
+    "allowed_number_rules": {
+      "name": "Allowed Number Rules",
+      "description": "Destinations that the add-on may call. Use exact:150 for one number, prefix:+49 for a prefix, or * only when every otherwise safe destination must be allowed."
+    },
+    "blocked_number_rules": {
+      "name": "Blocked Number Rules",
+      "description": "Additional destinations that must never be called. Use exact: or prefix: rules. A block rule always overrides an allow rule; built-in emergency blocks remain active."
+    },
+    "allowed_audio_hosts": {
+      "name": "Allowed Audio Hosts",
+      "description": "Exact hostnames or IP addresses from which audio_url WAV files may be downloaded. Enter no scheme, port, path, wildcard, or credentials."
+    },
+    "tts_voice": {
+      "name": "TTS Voice",
+      "description": "eSpeak voice used for locally generated call messages, for example de or en."
+    },
+    "tts_speed": {
+      "name": "TTS Speed",
+      "description": "Speaking speed for locally generated messages in words per minute."
+    },
+    "max_calls_per_window": {
+      "name": "Maximum Calls per Window",
+      "description": "Maximum number of successfully prepared outbound calls allowed during one rate-limit window."
+    },
+    "rate_limit_window_seconds": {
+      "name": "Rate-Limit Window (seconds)",
+      "description": "Length of the sliding outbound-call rate-limit window in seconds."
+    },
+    "max_audio_bytes": {
+      "name": "Maximum Audio Size (bytes)",
+      "description": "Largest remote WAV download accepted before a call is rejected."
+    },
+    "max_audio_seconds": {
+      "name": "Maximum Audio Duration (seconds)",
+      "description": "Longest WAV or generated message duration accepted for one call."
+    },
+    "hangup_buffer_seconds": {
+      "name": "Hangup Buffer (seconds)",
+      "description": "Extra fallback time added after the calculated audio duration before the add-on hangs up."
+    },
+    "terminal_state_seconds": {
+      "name": "Terminal State Duration (seconds)",
+      "description": "How long the final call result remains visible before the state returns to idle."
+    },
+    "log_level": {
+      "name": "Log Level",
+      "description": "Minimum detail written to the add-on log. Use debug only temporarily and review logs before sharing them."
+    }
+  }
+}

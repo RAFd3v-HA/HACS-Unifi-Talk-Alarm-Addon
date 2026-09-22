@@ -2,14 +2,31 @@
 
 ## 1. Create the Talk extension
 
-In UniFi Talk, create a dedicated third-party SIP device/user for Home
-Assistant. Record the values shown by Talk:
+Use the dedicated Third-Party Device screen; do not use the SIP Trunk Provider
+screen:
 
-- SIP server address
-- SIP port and transport
-- extension/authentication user
-- SIP password
-- outbound proxy, only if Talk explicitly provides one
+1. In UniFi Talk, open **Talk > Phones**.
+2. Select **Add Third-Party Device** and create a dedicated device for Home
+   Assistant.
+3. Open its **Overview**.
+4. Copy the four displayed values from top to bottom and paste them into the
+   matching add-on fields later in step 3.
+
+| UniFi Talk Overview | Add-on Configuration |
+| --- | --- |
+| SIP Server Host | SIP Server Host |
+| SIP Server Port | SIP Server Port |
+| SIP Username | SIP Username |
+| SIP Password | SIP Password |
+
+These are the only values to copy from UniFi Talk. If the screen instead shows
+**Provider**, **Auth Username**, **Password**, **Outbound Number Format**,
+**Phone Numbers**, or the advanced fields **SIP Proxy**, **Realm**, **Dialplan
+Context**, **Register with Provider**, **Registration Expiry**, and **IP Address
+Range**, you are configuring a SIP trunk and are on the wrong screen. Those
+values stay in UniFi Talk. **Auth Username** is not **SIP Username**, the
+provider **Password** is not **SIP Password**, and **SIP Proxy** or **Realm**
+must not be pasted into `outbound_proxy`.
 
 Do not reuse a console administrator account. The add-on does not need a UniFi
 console login, email, MFA code or API key.
@@ -27,12 +44,21 @@ entity layer; it cannot register the SIP extension or play call audio itself.
 
 ## 3. Configure the add-on
 
-Before starting it, enter the SIP values from step 1 and a random API token.
-For example, generate a token on a trusted machine with:
+Before starting it, paste **SIP Server Host**, **SIP Server Port**, **SIP
+Username**, and **SIP Password** into the four mapped fields from step 1. Keep
+their spelling and values exactly as shown in the Third-Party Device Overview.
+
+Create `api_token` yourself. It is a private credential between the add-on and
+the Home Assistant integration and does not come from UniFi Talk. For example,
+generate it on a trusted machine with:
 
 ```bash
 openssl rand -hex 32
 ```
+
+Keep `sip_transport` at `udp` and `outbound_proxy` empty unless separate,
+verified Third-Party Device instructions explicitly require different values.
+Never derive either option from the SIP Trunk Provider screen.
 
 Set a narrow number policy for the first test, such as:
 

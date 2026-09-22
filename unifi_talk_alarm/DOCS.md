@@ -6,9 +6,31 @@ the add-on's local API.
 
 ## Required configuration
 
-Enter the SIP host, port, extension, password and transport shown for the
-third-party device in Talk. Set a unique `api_token`; it must contain 32–512
-non-whitespace characters and a 64-character random hex token is recommended.
+Use this guided copy/paste flow:
+
+1. In UniFi Talk, open **Talk > Phones**.
+2. Select **Add Third-Party Device**, then open that device's **Overview**.
+3. Copy the four fields from top to bottom into the mapped add-on options.
+4. Create `api_token` yourself; do not look for it in UniFi Talk.
+
+| UniFi Talk Overview | Add-on Configuration |
+| --- | --- |
+| SIP Server Host | SIP Server Host |
+| SIP Server Port | SIP Server Port |
+| SIP Username | SIP Username |
+| SIP Password | SIP Password |
+
+Do not copy anything from the SIP Trunk Provider form. **Provider**, **Auth
+Username**, **Password**, **Outbound Number Format**, **Phone Numbers**, and the
+advanced **SIP Proxy**, **Realm**, **Dialplan Context**, **Register with
+Provider**, **Registration Expiry**, and **IP Address Range** settings remain in
+UniFi Talk. **Auth Username** is not **SIP Username**, the provider **Password**
+is not **SIP Password**, and **SIP Proxy** or **Realm** must not be entered as
+`outbound_proxy`.
+
+Set a unique `api_token`; it must contain 32–512 non-whitespace characters and
+a 64-character random hex token is recommended. The token is created by you,
+is shared only with the Home Assistant integration, and is not a Talk value.
 
 The add-on uses host networking for SIP/RTP. Its authenticated API listens only
 on host loopback at `127.0.0.1` and `api_port` (default `8099`). Configure the
@@ -22,11 +44,14 @@ the system CA store. Configure the Talk hostname covered by that certificate.
 
 | Option | Meaning |
 | --- | --- |
-| `sip_server`, `sip_port` | Talk SIP hostname/address and port |
-| `sip_extension`, `sip_password` | Dedicated third-party SIP credentials |
-| `sip_transport` | `udp`, `tcp`, or certificate-verified `tls` |
-| `outbound_proxy` | Optional complete `sip:` or `sips:` proxy URI |
-| `api_token`, `api_port` | Shared bearer token and loopback API port |
+| `sip_server` | **SIP Server Host** from the Third-Party Device Overview |
+| `sip_port` | **SIP Server Port** from the Third-Party Device Overview |
+| `sip_extension` | **SIP Username** from the Third-Party Device Overview |
+| `sip_password` | **SIP Password** from the Third-Party Device Overview |
+| `sip_transport` | Keep `udp` unless separate, verified Third-Party Device instructions require `tcp` or certificate-verified `tls` |
+| `outbound_proxy` | Optional complete Third-Party Device `sip:` or `sips:` proxy URI; never a provider SIP Proxy or Realm |
+| `api_token` | Private token you create yourself; it does not come from Talk |
+| `api_port` | Loopback API port used by the Home Assistant integration |
 | `allowed_number_rules` | Exact/prefix outbound allow rules |
 | `blocked_number_rules` | Additional deny rules; deny wins |
 | `allowed_audio_hosts` | Exact host allowlist for remote WAV files |

@@ -1,0 +1,84 @@
+{
+  "configuration": {
+    "sip_server": {
+      "name": "SIP Server Host",
+      "description": "1. Öffne in UniFi Talk den Pfad Talk > Phones > Add Third-Party Device > Overview. Kopiere SIP Server Host exakt wie angezeigt. Verwende keinen Wert eines SIP Trunk Providers."
+    },
+    "sip_port": {
+      "name": "SIP Server Port",
+      "description": "2. Kopiere in derselben Ansicht Talk > Phones > Add Third-Party Device > Overview den Wert SIP Server Port exakt wie angezeigt."
+    },
+    "sip_extension": {
+      "name": "SIP Username",
+      "description": "3. Kopiere in derselben Ansicht Talk > Phones > Add Third-Party Device > Overview den Wert SIP Username exakt wie angezeigt. Das ist nicht das SIP-Trunk-Provider-Feld Auth Username."
+    },
+    "sip_password": {
+      "name": "SIP Password",
+      "description": "4. Kopiere in derselben Ansicht Talk > Phones > Add Third-Party Device > Overview den Wert SIP Password exakt wie angezeigt. Das ist nicht das Password des SIP Trunk Providers."
+    },
+    "sip_transport": {
+      "name": "SIP-Transport",
+      "description": "Transport für die Registrierung des eigenen Third-Party Device. Behalte udp bei, sofern keine separat geprüfte Geräteanleitung tcp oder tls verlangt. Leite diesen Wert nicht aus einer SIP-Trunk-Provider-Konfiguration ab."
+    },
+    "outbound_proxy": {
+      "name": "Outbound Proxy",
+      "description": "Optionale vollständige sip:- oder sips:-Proxy-URI für das eigene Third-Party Device. Normalerweise leer lassen. Kopiere hier niemals die SIP-Trunk-Provider-Felder SIP Proxy oder Realm."
+    },
+    "api_token": {
+      "name": "API-Token (selbst erstellen)",
+      "description": "Erstelle dieses private Token selbst und teile es nur mit der Home-Assistant-Integration. Es stammt nicht aus UniFi Talk. Verwende 32-512 Zeichen ohne Leerraum; empfohlen ist ein zufälliges Hex-Token mit 64 Zeichen."
+    },
+    "api_port": {
+      "name": "Lokaler API-Port",
+      "description": "Nur über Loopback erreichbarer Port, über den die Home-Assistant-Integration dieses Add-on anspricht. Behalte 8099 bei, sofern der Port nicht bereits verwendet wird."
+    },
+    "allowed_number_rules": {
+      "name": "Erlaubte Nummernregeln",
+      "description": "Ziele, die das Add-on anrufen darf. Verwende exact:150 für eine einzelne Nummer, prefix:+49 für einen Präfix oder * nur, wenn jedes ansonsten sichere Ziel erlaubt sein soll."
+    },
+    "blocked_number_rules": {
+      "name": "Gesperrte Nummernregeln",
+      "description": "Zusätzliche Ziele, die nie angerufen werden dürfen. Verwende exact:- oder prefix:-Regeln. Eine Sperre überstimmt immer eine Freigabe; die eingebauten Notrufsperren bleiben aktiv."
+    },
+    "allowed_audio_hosts": {
+      "name": "Erlaubte Audio-Hosts",
+      "description": "Exakte Hostnamen oder IP-Adressen, von denen audio_url-WAV-Dateien geladen werden dürfen. Kein Schema, keinen Port, Pfad, Platzhalter oder Zugangsdaten eintragen."
+    },
+    "tts_voice": {
+      "name": "TTS-Stimme",
+      "description": "eSpeak-Stimme für lokal erzeugte Anruftexte, zum Beispiel de oder en."
+    },
+    "tts_speed": {
+      "name": "TTS-Sprechtempo",
+      "description": "Sprechtempo für lokal erzeugte Nachrichten in Wörtern pro Minute."
+    },
+    "max_calls_per_window": {
+      "name": "Maximale Anrufe pro Zeitfenster",
+      "description": "Maximale Zahl erfolgreich vorbereiteter ausgehender Anrufe innerhalb eines Rate-Limit-Zeitfensters."
+    },
+    "rate_limit_window_seconds": {
+      "name": "Rate-Limit-Zeitfenster (Sekunden)",
+      "description": "Länge des gleitenden Rate-Limit-Zeitfensters für ausgehende Anrufe in Sekunden."
+    },
+    "max_audio_bytes": {
+      "name": "Maximale Audiogröße (Bytes)",
+      "description": "Größter akzeptierter Remote-WAV-Download, bevor ein Anruf abgelehnt wird."
+    },
+    "max_audio_seconds": {
+      "name": "Maximale Audiodauer (Sekunden)",
+      "description": "Längste akzeptierte WAV- oder erzeugte Nachrichtendauer für einen Anruf."
+    },
+    "hangup_buffer_seconds": {
+      "name": "Auflegepuffer (Sekunden)",
+      "description": "Zusätzliche Rückfallzeit nach der berechneten Audiodauer, bevor das Add-on auflegt."
+    },
+    "terminal_state_seconds": {
+      "name": "Dauer des Endstatus (Sekunden)",
+      "description": "Wie lange das letzte Anrufergebnis sichtbar bleibt, bevor der Status zu idle zurückkehrt."
+    },
+    "log_level": {
+      "name": "Protokollierungsstufe",
+      "description": "Kleinste Detailstufe im Add-on-Protokoll. Verwende debug nur vorübergehend und prüfe Protokolle vor dem Teilen."
+    }
+  }
+}

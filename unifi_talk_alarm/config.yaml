@@ -11,6 +11,7 @@ boot: auto
 init: false
 host_network: true
 options:
+  # UI copy/paste order from Talk > Phones > Add Third-Party Device > Overview.
   sip_server: ""
   sip_port: 5060
   sip_extension: ""
@@ -38,6 +39,7 @@ options:
   terminal_state_seconds: 15
   log_level: info
 schema:
+  # Keep the four Talk values in the same order as the options UI above.
   sip_server: str
   sip_port: port
   sip_extension: str

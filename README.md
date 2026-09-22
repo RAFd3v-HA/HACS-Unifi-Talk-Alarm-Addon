@@ -55,17 +55,43 @@ loopback address with the Home Assistant LAN address or the add-on slug.
 See [INSTALLATION.md](INSTALLATION.md). The add-on store also displays
 [unifi_talk_alarm/DOCS.md](unifi_talk_alarm/DOCS.md).
 
+### Guided UniFi Talk copy/paste
+
+Only copy the four credentials from **Talk > Phones > Add Third-Party Device >
+Overview**, in the order shown there:
+
+1. In UniFi Talk, open **Talk > Phones** and select **Add Third-Party Device**.
+2. Open **Overview** for that dedicated device.
+3. Copy the following four fields from top to bottom and paste each value into
+   the matching add-on option.
+4. Create `api_token` yourself; it is not supplied by UniFi Talk.
+
+| UniFi Talk Overview | Add-on Configuration |
+| --- | --- |
+| SIP Server Host | SIP Server Host |
+| SIP Server Port | SIP Server Port |
+| SIP Username | SIP Username |
+| SIP Password | SIP Password |
+
+Do not copy values from the SIP Trunk Provider form. Its **Provider**, **Auth
+Username**, **Password**, **Outbound Number Format**, **Phone Numbers**, and
+advanced **SIP Proxy**, **Realm**, **Dialplan Context**, **Register with
+Provider**, **Registration Expiry**, and **IP Address Range** settings remain in
+UniFi Talk. In particular, **Auth Username** is not **SIP Username**, the
+provider **Password** is not **SIP Password**, and neither **SIP Proxy** nor
+**Realm** belongs in `outbound_proxy`.
+
 Important options:
 
 | Option | Purpose |
 | --- | --- |
-| `sip_server` | UniFi console/Talk SIP host, without a scheme or path |
-| `sip_port` | Talk SIP port, normally `5060` unless Talk shows another value |
-| `sip_extension` | Dedicated third-party Talk extension/user |
-| `sip_password` | SIP password; bare account-syntax delimiters are rejected |
-| `sip_transport` | `udp`, `tcp`, or `tls`, matching Talk; TLS verifies the server certificate |
-| `outbound_proxy` | Optional complete `sip:`/`sips:` proxy URI |
-| `api_token` | Private bearer token shared only with the HA integration; 32–512 non-whitespace characters |
+| `sip_server` | **SIP Server Host** copied from the Third-Party Device Overview |
+| `sip_port` | **SIP Server Port** copied from the Third-Party Device Overview |
+| `sip_extension` | **SIP Username** copied from the Third-Party Device Overview |
+| `sip_password` | **SIP Password** copied from the Third-Party Device Overview; bare account-syntax delimiters are rejected |
+| `sip_transport` | Keep `udp` unless separate, verified Third-Party Device instructions require `tcp` or `tls`; TLS verifies the server certificate |
+| `outbound_proxy` | Optional complete `sip:`/`sips:` device proxy URI; never copy a provider SIP Proxy or Realm |
+| `api_token` | Create this private bearer token yourself; it is not a Talk value; use 32–512 non-whitespace characters |
 | `api_port` | Loopback TCP port for the local HTTP API, default `8099` |
 | `allowed_number_rules` | Explicit exact/prefix rules; no unsafe regular expressions |
 | `blocked_number_rules` | Extra deny rules; deny always wins |
