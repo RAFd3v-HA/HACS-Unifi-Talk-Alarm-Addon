@@ -422,6 +422,7 @@ class BaresipCtrlTcpAdapter(SipAdapter):
         self._cleanup_incoming_audio()
         incoming = runtime / "incoming.wav"
         lines = [
+            "module_path /usr/lib/baresip/modules",
             "poll_method poll",
             "sip_listen 0.0.0.0:0",
         ]

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.2
+
+- Fixed Baresip module discovery on the Debian add-on image so the SIP client,
+  registration, and local control channel can start.
+
 ## 0.1.1
 
 - Added guided German and English configuration labels that mirror the four

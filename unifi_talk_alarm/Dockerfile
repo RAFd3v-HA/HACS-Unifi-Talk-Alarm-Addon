@@ -27,7 +27,7 @@ RUN apt-get update \
     && command -v ffmpeg >/dev/null \
     && command -v python3 >/dev/null \
     && for module in account.so aufile.so ctrl_tcp.so g711.so menu.so; do \
-        test -n "$(find /usr/lib -type f -name "${module}" -print -quit)"; \
+        test -f "/usr/lib/baresip/modules/${module}"; \
     done \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*

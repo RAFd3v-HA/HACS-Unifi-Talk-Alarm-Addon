@@ -59,6 +59,7 @@ def test_dockerfile_uses_multiarch_home_assistant_base_and_required_modules() ->
     assert "ARG BUILD_FROM" not in dockerfile
     assert not (ADDON / "build.yaml").exists()
     assert 'io.hass.type="app"' in dockerfile
+    assert 'test -f "/usr/lib/baresip/modules/${module}"' in dockerfile
     for module in ("account.so", "aufile.so", "ctrl_tcp.so", "g711.so", "menu.so"):
         assert module in dockerfile
 

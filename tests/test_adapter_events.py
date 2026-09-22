@@ -52,6 +52,13 @@ async def test_generated_baresip_configuration_is_single_call_and_ephemeral(
     adapter._write_configuration()
 
     generated = (app_config.baresip_config_dir / "config").read_text(encoding="utf-8")
+    generated_lines = generated.splitlines()
+    assert "module_path /usr/lib/baresip/modules" in generated_lines
+    assert generated_lines.index("module_path /usr/lib/baresip/modules") < next(
+        index
+        for index, line in enumerate(generated_lines)
+        if line.startswith(("module ", "module_tmp ", "module_app "))
+    )
     assert "call_local_timeout 5" in generated
     assert "call_max_calls 1" in generated
     assert "ausrc_channels 1" in generated
