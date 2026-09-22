@@ -2,7 +2,9 @@
 
 import json
 from pathlib import Path
+import re
 
+from talk_alarm import __version__
 from talk_alarm.__main__ import API_BIND_HOST
 
 
@@ -38,6 +40,17 @@ OPTION_KEYS = {
 
 def test_runtime_api_is_loopback_only() -> None:
     assert API_BIND_HOST == "127.0.0.1"
+
+
+def test_addon_and_runtime_versions_match() -> None:
+    """A version bump must reach Supervisor metadata and the health endpoint."""
+    config = (ADDON / "config.yaml").read_text(encoding="utf-8")
+    match = re.search(r'^version:\s*["\']?([^"\'\s]+)', config, re.MULTILINE)
+    assert match is not None
+    assert match.group(1) == __version__
+
+    changelog = (ADDON / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert f"## {__version__}" in changelog
 
 
 def test_dockerfile_uses_multiarch_home_assistant_base_and_required_modules() -> None:
