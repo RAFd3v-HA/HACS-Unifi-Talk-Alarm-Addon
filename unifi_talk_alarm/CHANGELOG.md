@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.2
+
+- Added privacy-safe categories for Baresip call-close reasons, SDP/audio
+  warnings and normal WAV end-of-file events to help diagnose silent calls.
+- Report when Baresip returns an audio-source switch failure inside an otherwise
+  successful control response, without logging its raw response or file path.
+
 ## 0.2.1
 
 - Added privacy-safe SIP event and command-result diagnostics to the add-on log,

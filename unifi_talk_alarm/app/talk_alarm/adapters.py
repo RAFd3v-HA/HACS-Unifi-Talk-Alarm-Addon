@@ -29,6 +29,51 @@ _DIAGNOSTIC_CALL_EVENTS = frozenset(
     }
 )
 _SIP_STATUS = re.compile(r"^\s*(?:SIP/2\.0\s+)?([1-6][0-9]{2})(?=\s|$)")
+_CLOSE_CAUSES = {
+    "connection reset by peer": "connection_reset",
+    "end of file": "audio_eof",
+    "local timeout": "local_timeout",
+    "mediaenc failed": "media_encryption_failed",
+    "no audio codecs": "codec_mismatch",
+    "rtp stream error": "rtp_stream_error",
+    "wrong address family": "address_family_error",
+}
+_PROCESS_CAUSES = (
+    ("call: could not decode sdp answer:", "sdp_answer_decode_failed"),
+    ("call: update: audio_decoder_set error:", "audio_decoder_failed"),
+    ("call: start: audio_encoder_set error:", "audio_encoder_failed"),
+    ("call: start: audio_decoder_set error:", "audio_decoder_failed"),
+    ("call: start: audio_start error:", "audio_start_failed"),
+    ("call: could not start audio:", "audio_start_failed"),
+    ("call: secure: could not start audio:", "audio_start_failed"),
+    ("call: mnatconn: could not start audio:", "audio_start_failed"),
+    ("audio: alloc decoder:", "audio_decoder_failed"),
+    ("audio: alloc encoder:", "audio_encoder_failed"),
+    ("audio: start_source failed (", "audio_source_start_failed"),
+    ("audio: start_player failed (", "audio_player_start_failed"),
+)
+
+
+def _close_cause(detail: str) -> str:
+    """Classify a Baresip close reason without exposing its free-form text."""
+    if _SIP_STATUS.match(detail):
+        return "sip_response"
+    normalized = detail.strip().lower()
+    if not normalized:
+        return "unspecified"
+    if normalized.startswith("mediaenc failed "):
+        return "media_encryption_failed"
+    return _CLOSE_CAUSES.get(normalized, "unclassified")
+
+
+def _audio_error_cause(detail: str) -> str:
+    """Baresip reports normal aufile EOF through its AUDIO_ERROR event."""
+    normalized = detail.strip().lower()
+    if normalized == "0,end of file":
+        return "audio_eof"
+    if re.match(r"^[1-9][0-9]{0,5},", normalized):
+        return "nonzero_audio_error"
+    return "unclassified"
 
 
 class AdapterEventType(StrEnum):
@@ -237,6 +282,19 @@ class BaresipCtrlTcpAdapter(SipAdapter):
                 if command in {"dial", "ausrc", "hangup"}:
                     _LOGGER.warning("Baresip command %s rejected", command)
                 raise RuntimeError("baresip rejected the ctrl_tcp command")
+            if command == "ausrc":
+                data = response.get("data")
+                if isinstance(data, str) and any(
+                    marker in data.lower()
+                    for marker in (
+                        "failed to set audio-source",
+                        "no such audio-source",
+                        "no such device for",
+                        "no config object",
+                    )
+                ):
+                    _LOGGER.warning("Baresip command ausrc source_switch_failed")
+                    return response
             if command in {"dial", "ausrc", "hangup"}:
                 _LOGGER.info("Baresip command %s accepted", command)
             return response
@@ -247,7 +305,9 @@ class BaresipCtrlTcpAdapter(SipAdapter):
             return
         try:
             while line := await process.stdout.readline():
-                await self._parse_line(line.decode("utf-8", errors="replace")[:4096])
+                decoded = line.decode("utf-8", errors="replace")[:4096]
+                self._log_process_diagnostic(decoded)
+                await self._parse_line(decoded)
             return_code = await process.wait()
             if not self._stopping:
                 _LOGGER.error("baresip stopped unexpectedly with code %s", return_code)
@@ -256,6 +316,17 @@ class BaresipCtrlTcpAdapter(SipAdapter):
                 )
         except asyncio.CancelledError:
             raise
+
+    @staticmethod
+    def _log_process_diagnostic(line: str) -> None:
+        """Log only fixed, known Baresip warning categories, never raw output."""
+        normalized = line.strip().lower()
+        if normalized.startswith("warning: "):
+            normalized = normalized[len("warning: ") :]
+        for prefix, cause in _PROCESS_CAUSES:
+            if normalized.startswith(prefix):
+                _LOGGER.warning("Baresip diagnostic cause=%s", cause)
+                return
 
     async def _read_ctrl_output(self) -> None:
         reader = self._ctrl_reader
@@ -311,13 +382,22 @@ class BaresipCtrlTcpAdapter(SipAdapter):
                 if event_name == "CALL_CLOSED":
                     match = _SIP_STATUS.match(detail)
                     code = match.group(1) if match else "unknown"
-                    _LOGGER.info("Baresip call event CALL_CLOSED sip_code=%s", code)
+                    _LOGGER.info(
+                        "Baresip call event CALL_CLOSED sip_code=%s cause=%s",
+                        code,
+                        _close_cause(detail),
+                    )
                 else:
                     _LOGGER.info("Baresip call event %s", event_name)
-            elif event_class == "other" and event_name in {
-                "CALL_RTPESTAB",
-                "AUDIO_ERROR",
-            }:
+            elif event_class == "other" and event_name == "AUDIO_ERROR":
+                _LOGGER.info(
+                    "Baresip media event AUDIO_ERROR cause=%s",
+                    _audio_error_cause(detail),
+                )
+            elif event_class == "other" and event_name == "CALL_REMOTE_SDP":
+                kind = detail if detail in {"offer", "answer"} else "unknown"
+                _LOGGER.info("Baresip media event CALL_REMOTE_SDP kind=%s", kind)
+            elif event_class == "other" and event_name == "CALL_RTPESTAB":
                 _LOGGER.info("Baresip media event %s", event_name)
             self._queue_event(
                 (event_class if isinstance(event_class, str) else "", event_name, detail)

@@ -7,7 +7,14 @@ import json
 import logging
 from pathlib import Path
 
-from talk_alarm.adapters import AdapterEventType, BaresipCtrlTcpAdapter
+import pytest
+
+from talk_alarm.adapters import (
+    AdapterEventType,
+    BaresipCtrlTcpAdapter,
+    _audio_error_cause,
+    _close_cause,
+)
 from talk_alarm.config import AppConfig
 from talk_alarm.manager import CallManager
 
@@ -62,6 +69,7 @@ async def test_call_diagnostics_log_only_event_names_and_sip_code(
         {"event": True, "class": "call", "type": "CALL_RINGING", "param": secret},
         {"event": True, "class": "call", "type": "CALL_ANSWERED", "param": secret},
         {"event": True, "class": "other", "type": "CALL_RTPESTAB", "param": secret},
+        {"event": True, "class": "other", "type": "CALL_REMOTE_SDP", "param": secret},
         {"event": True, "class": "other", "type": "AUDIO_ERROR", "param": secret},
         {
             "event": True,
@@ -91,8 +99,9 @@ async def test_call_diagnostics_log_only_event_names_and_sip_code(
             "Baresip call event CALL_RINGING",
             "Baresip call event CALL_ANSWERED",
             "Baresip media event CALL_RTPESTAB",
-            "Baresip media event AUDIO_ERROR",
-            "Baresip call event CALL_CLOSED sip_code=486",
+            "Baresip media event CALL_REMOTE_SDP kind=unknown",
+            "Baresip media event AUDIO_ERROR cause=unclassified",
+            "Baresip call event CALL_CLOSED sip_code=486 cause=sip_response",
         ]
         assert secret not in caplog.text
         assert "+491555123456" not in caplog.text
@@ -126,9 +135,109 @@ async def test_closed_param_cannot_become_established_event(
 
         assert [event.type for event in events] == [AdapterEventType.CALL_CLOSED]
         assert [record.getMessage() for record in caplog.records] == [
-            "Baresip call event CALL_CLOSED sip_code=unknown"
+            "Baresip call event CALL_CLOSED sip_code=unknown cause=unclassified"
         ]
         assert "private-value" not in caplog.text
+    finally:
+        if adapter._event_task is not None:
+            adapter._event_task.cancel()
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    (
+        ("", "unspecified"),
+        ("Connection reset by peer", "connection_reset"),
+        ("end of file", "audio_eof"),
+        ("Local timeout", "local_timeout"),
+        ("No audio codecs", "codec_mismatch"),
+        ("rtp stream error", "rtp_stream_error"),
+        ("mediaenc failed", "media_encryption_failed"),
+        ("mediaenc failed I/O error", "media_encryption_failed"),
+        ("Wrong address family", "address_family_error"),
+        ("486 Busy Here", "sip_response"),
+        ("Protocol error sip:+491555123456@private.invalid", "unclassified"),
+    ),
+)
+def test_close_reason_is_only_a_fixed_category(detail: str, expected: str) -> None:
+    assert _close_cause(detail) == expected
+
+
+@pytest.mark.parametrize(
+    ("detail", "expected"),
+    (
+        ("0,end of file", "audio_eof"),
+        ("5,source failed", "nonzero_audio_error"),
+        ("0,private-sip-password-and-token", "unclassified"),
+    ),
+)
+def test_audio_error_is_only_a_fixed_category(detail: str, expected: str) -> None:
+    assert _audio_error_cause(detail) == expected
+
+
+def test_process_warning_diagnostics_never_log_raw_output(
+    app_config: AppConfig, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    secret = "sip:+491555123456@private.invalid token=private-password"
+    with caplog.at_level(logging.WARNING, logger="talk_alarm.adapters"):
+        adapter._log_process_diagnostic(
+            f"call: could not decode SDP answer: Protocol error {secret}"
+        )
+        adapter._log_process_diagnostic(
+            f"Warning: call: update: audio_decoder_set error: {secret}"
+        )
+        adapter._log_process_diagnostic(
+            f"call: secure: could not start audio: {secret}"
+        )
+        adapter._log_process_diagnostic(
+            f"call: mnatconn: could not start audio: {secret}"
+        )
+        adapter._log_process_diagnostic(f"call: unrelated warning {secret}")
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "Baresip diagnostic cause=sdp_answer_decode_failed",
+        "Baresip diagnostic cause=audio_decoder_failed",
+        "Baresip diagnostic cause=audio_start_failed",
+        "Baresip diagnostic cause=audio_start_failed",
+    ]
+    assert secret not in caplog.text
+
+
+async def test_answered_then_closed_without_established_is_diagnosed(
+    app_config: AppConfig, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    events = []
+
+    async def collect(event):
+        events.append(event)
+
+    adapter.set_event_handler(collect)
+    try:
+        with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+            await adapter._handle_ctrl_message(
+                {"event": True, "class": "call", "type": "CALL_ANSWERED", "param": ""}
+            )
+            await adapter._handle_ctrl_message(
+                {
+                    "event": True,
+                    "class": "other",
+                    "type": "CALL_REMOTE_SDP",
+                    "param": "answer",
+                }
+            )
+            await adapter._handle_ctrl_message(
+                {"event": True, "class": "call", "type": "CALL_CLOSED", "param": ""}
+            )
+            await adapter.wait_for_queued_events()
+
+        assert [event.type for event in events] == [AdapterEventType.CALL_CLOSED]
+        assert [record.getMessage() for record in caplog.records] == [
+            "Baresip call event CALL_ANSWERED",
+            "Baresip media event CALL_REMOTE_SDP kind=answer",
+            "Baresip call event CALL_CLOSED sip_code=unknown cause=unspecified",
+        ]
     finally:
         if adapter._event_task is not None:
             adapter._event_task.cancel()
@@ -277,3 +386,45 @@ async def test_event_handler_command_does_not_block_ctrl_response(
     assert "private-command-response" not in caplog.text
     if adapter._event_task is not None:
         adapter._event_task.cancel()
+
+
+async def test_ausrc_response_failure_is_logged_without_path_or_reason(
+    app_config: AppConfig, tmp_path: Path, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    private_path = tmp_path / "private-password.wav"
+
+    class FakeWriter:
+        def is_closing(self) -> bool:
+            return False
+
+        def write(self, frame: bytes) -> None:
+            colon = frame.index(b":")
+            length = int(frame[:colon])
+            payload = json.loads(frame[colon + 1 : colon + 1 + length])
+            asyncio.create_task(
+                adapter._handle_ctrl_message(
+                    {
+                        "response": True,
+                        "ok": True,
+                        "token": payload["token"],
+                        "data": (
+                            f"switch audio device: aufile,{private_path}\n"
+                            "failed to set audio-source (private-reason)\n"
+                        ),
+                    }
+                )
+            )
+
+        async def drain(self) -> None:
+            await asyncio.sleep(0)
+
+    adapter._ctrl_writer = FakeWriter()
+    with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+        await adapter.start_audio(private_path)
+
+    assert [record.getMessage() for record in caplog.records] == [
+        "Baresip command ausrc source_switch_failed"
+    ]
+    assert str(private_path) not in caplog.text
+    assert "private-reason" not in caplog.text
