@@ -34,6 +34,31 @@ class BlockingAudioProvider:
     async def from_url(self, audio_url: str) -> PreparedAudio:
         return await self.from_message(audio_url)
 
+    async def from_wav_bytes(self, audio_wav: bytes) -> PreparedAudio:
+        return await self.from_message(audio_wav.decode("ascii"))
+
+
+async def test_manager_defends_exact_audio_source_invariant(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    adapter = FakeSipAdapter()
+    audio = BlockingAudioProvider(tmp_path)
+    manager = CallManager(app_config, adapter, audio)
+    try:
+        for sources in (
+            {"message": None, "audio_url": None, "audio_wav": None},
+            {"message": "Alarm", "audio_url": None, "audio_wav": b"wav"},
+        ):
+            with pytest.raises(ServiceError) as error:
+                await manager.start_call(
+                    number="150", ring_timeout=30, **sources
+                )
+            assert error.value.code == "invalid_audio_source"
+        assert not audio.started.is_set()
+        assert adapter.dialed == []
+    finally:
+        await manager.shutdown()
+
 
 async def test_hangup_during_media_preparation_never_dials(
     app_config: AppConfig, tmp_path: Path

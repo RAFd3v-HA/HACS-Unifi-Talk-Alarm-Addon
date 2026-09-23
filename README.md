@@ -11,6 +11,7 @@ v1.
 - outbound calls to explicitly allowlisted extensions or phone-number prefixes
 - locally spoken `message` text with `espeak-ng`
 - alternative allowlisted HTTP(S) WAV source
+- bounded Base64 WAV input rendered by the companion Home Assistant integration
 - `ffmpeg` normalization to PCM signed 16-bit, mono, 8 kHz
 - alarm audio starts only after `CALL_ESTABLISHED`
 - automatic hangup on audio EOF, with duration-plus-buffer fallback
@@ -21,14 +22,17 @@ v1.
 - configurable additional number blocks
 - constant-time bearer-token authentication
 - HTTP API bound only to the Home Assistant host loopback interface
-- bounded JSON, download size, WAV duration and subprocess execution
+- bounded JSON/Base64 input, download size, WAV duration and subprocess execution
 - exact audio-host allowlist, no redirects and no proxy-environment inheritance
 - normalized registration/call state for Home Assistant
 - no SIP or bearer credentials in API status responses
 - received audio is written only below `/tmp` and deleted after every call
 
-`message` is synthesized locally. No cloud TTS service and no Piper service are
-used. The MVP is outbound-only and does not queue or automatically retry calls.
+Direct API `message` input is synthesized locally. The companion integration
+can instead render a message through a Home Assistant TTS entity and submit only
+the resulting WAV as `audio_wav_base64`; cloud credentials never enter this
+add-on. The MVP is outbound-only and does not queue or automatically retry
+calls.
 
 ## Architecture
 
@@ -38,7 +42,7 @@ Home Assistant automation
         | authenticated HTTP API v1
         v
 UniFi Talk Alarm add-on
-        |  espeak-ng -> ffmpeg -> WAV
+        |  message / audio_url / audio_wav_base64 -> ffmpeg -> WAV
         |  baresip SIP/RTP
         v
 UniFi Talk -> phone or configured outbound route
@@ -132,6 +136,13 @@ The complete request/response schema is defined by the companion integration's
 `API_CONTRACT.md`. A call request may spend time downloading/synthesizing and
 normalizing audio before it returns. Clients should allow 60 seconds, must not
 retry an uncertain `POST /calls`, and should inspect `/status` instead.
+
+`POST /calls` accepts exactly one of `message`, `audio_url`, and
+`audio_wav_base64`. The Base64 form is intended for the companion integration's
+authenticated loopback transfer of a Home Assistant-rendered PCM WAV. It must
+be strict whitespace-free ASCII Base64. Both the encoded request and decoded
+WAV are bounded from `max_audio_bytes`; the WAV is validated and normalized
+again before any SIP call is placed.
 
 ## Development
 

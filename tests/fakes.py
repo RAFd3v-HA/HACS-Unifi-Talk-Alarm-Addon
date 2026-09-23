@@ -53,6 +53,7 @@ class FakeAudioProvider:
         self.duration = duration
         self.messages: list[str] = []
         self.urls: list[str] = []
+        self.wav_payloads: list[bytes] = []
         self._counter = 0
 
     def _audio(self) -> PreparedAudio:
@@ -69,4 +70,8 @@ class FakeAudioProvider:
 
     async def from_url(self, audio_url: str) -> PreparedAudio:
         self.urls.append(audio_url)
+        return self._audio()
+
+    async def from_wav_bytes(self, audio_wav: bytes) -> PreparedAudio:
+        self.wav_payloads.append(audio_wav)
         return self._audio()

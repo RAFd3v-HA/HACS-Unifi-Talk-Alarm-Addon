@@ -130,8 +130,11 @@ Expected state sequence:
 dialing → ringing → connected → ending → ended → idle
 ```
 
-The add-on synthesizes `message` locally, converts it to 16-bit mono 8 kHz PCM,
-and switches baresip to that WAV only after Talk reports `CALL_ESTABLISHED`.
+The companion integration may render `message` through Home Assistant TTS and
+send the resulting WAV over the authenticated loopback API; no cloud credential
+is stored in the add-on. Direct API clients can still request local eSpeak TTS.
+The add-on validates and converts either result to 16-bit mono 8 kHz PCM, then
+switches baresip to that WAV only after Talk reports `CALL_ESTABLISHED`.
 It hangs up at audio EOF or after the WAV duration plus the configured buffer.
 The SIP identity is outbound-only. Any received audio is temporarily directed
 to `/tmp` and removed when the call ends or the add-on stops.

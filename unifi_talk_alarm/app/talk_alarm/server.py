@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 import hmac
 import json
 import logging
@@ -19,6 +21,13 @@ from .manager import CallManager
 _LOGGER = logging.getLogger(__name__)
 _NUMBER = re.compile(r"^\+?[0-9*#]{1,31}$")
 _CALL_ID = re.compile(r"^[0-9A-Za-z._:-]{1,128}$")
+_MIN_CLIENT_MAX_SIZE = 32 * 1024
+_MAX_JSON_OVERHEAD = 8 * 1024
+
+
+def _max_base64_length(decoded_limit: int) -> int:
+    """Return the longest standard Base64 representation for a byte limit."""
+    return 4 * ((decoded_limit + 2) // 3)
 
 
 def _error_response(error: ServiceError) -> web.Response:
@@ -132,6 +141,34 @@ def _audio_url(value: Any) -> str:
     return normalized
 
 
+def _audio_wav(value: Any, *, maximum_bytes: int) -> bytes:
+    """Strictly decode one bounded, whitespace-free Base64 WAV value."""
+    if not isinstance(value, str):
+        raise ServiceError(422, "invalid_audio", "audio_wav_base64 must be a string")
+
+    maximum_encoded = _max_base64_length(maximum_bytes)
+    if len(value) > maximum_encoded:
+        raise ServiceError(413, "audio_too_large", "The WAV exceeds the size limit")
+    if not value or not value.isascii() or any(character.isspace() for character in value):
+        raise ServiceError(
+            422,
+            "invalid_audio",
+            "audio_wav_base64 is empty or is not strict ASCII Base64",
+        )
+
+    try:
+        decoded = base64.b64decode(value, validate=True)
+    except (binascii.Error, ValueError) as err:
+        raise ServiceError(
+            422, "invalid_audio", "audio_wav_base64 is not valid Base64"
+        ) from err
+    if not decoded:
+        raise ServiceError(422, "invalid_audio", "The WAV contains no audio")
+    if len(decoded) > maximum_bytes:
+        raise ServiceError(413, "audio_too_large", "The WAV exceeds the size limit")
+    return decoded
+
+
 def _ring_timeout(value: Any) -> int:
     if isinstance(value, bool):
         raise ServiceError(422, "invalid_ring_timeout", "ring_timeout must be an integer")
@@ -167,20 +204,35 @@ async def status(request: web.Request) -> web.Response:
 async def create_call(request: web.Request) -> web.Response:
     payload = await _json_object(
         request,
-        allowed_keys=frozenset({"number", "message", "audio_url", "ring_timeout"}),
+        allowed_keys=frozenset(
+            {"number", "message", "audio_url", "audio_wav_base64", "ring_timeout"}
+        ),
     )
     has_message = "message" in payload and payload.get("message") is not None
     has_url = "audio_url" in payload and payload.get("audio_url") is not None
-    if has_message == has_url:
+    has_wav = (
+        "audio_wav_base64" in payload
+        and payload.get("audio_wav_base64") is not None
+    )
+    if sum((has_message, has_url, has_wav)) != 1:
         raise ServiceError(
             422,
             "invalid_audio_source",
-            "Exactly one of message and audio_url is required",
+            "Exactly one of message, audio_url and audio_wav_base64 is required",
         )
+    audio_wav = (
+        _audio_wav(
+            payload["audio_wav_base64"],
+            maximum_bytes=request.app["config"].max_audio_bytes,
+        )
+        if has_wav
+        else None
+    )
     call = await request.app["manager"].start_call(
         number=_number(payload.get("number")),
         message=_message(payload["message"]) if has_message else None,
         audio_url=_audio_url(payload["audio_url"]) if has_url else None,
+        audio_wav=audio_wav,
         ring_timeout=_ring_timeout(payload.get("ring_timeout", 30)),
     )
     return web.json_response(
@@ -204,9 +256,14 @@ async def refresh(request: web.Request) -> web.Response:
 
 
 def create_app(config: AppConfig, manager: CallManager) -> web.Application:
-    """Build the API app with a small request-body limit."""
+    """Build the API app with a bounded request-body limit."""
+    client_max_size = max(
+        _MIN_CLIENT_MAX_SIZE,
+        _max_base64_length(config.max_audio_bytes) + _MAX_JSON_OVERHEAD,
+    )
     app = web.Application(
-        middlewares=(error_middleware, auth_middleware), client_max_size=32 * 1024
+        middlewares=(error_middleware, auth_middleware),
+        client_max_size=client_max_size,
     )
     app["config"] = config
     app["manager"] = manager
@@ -216,4 +273,3 @@ def create_app(config: AppConfig, manager: CallManager) -> web.Application:
     app.router.add_post("/api/v1/calls/{call_id}/hangup", hangup_call)
     app.router.add_post("/api/v1/refresh", refresh)
     return app
-

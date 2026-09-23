@@ -33,6 +33,8 @@ class AudioProvider(Protocol):
 
     async def from_url(self, audio_url: str) -> PreparedAudio: ...
 
+    async def from_wav_bytes(self, audio_wav: bytes) -> PreparedAudio: ...
+
 
 class CallManager:
     """Serialize calls and map adapter events to API v1 states."""
@@ -70,9 +72,16 @@ class CallManager:
         number: str,
         message: str | None,
         audio_url: str | None,
+        audio_wav: bytes | None = None,
         ring_timeout: int,
     ) -> CallSnapshot:
         """Prepare media, dial once, and return the initial call state."""
+        if sum(source is not None for source in (message, audio_url, audio_wav)) != 1:
+            raise ServiceError(
+                422,
+                "invalid_audio_source",
+                "Exactly one of message, audio_url and audio_wav_base64 is required",
+            )
         if not self._config.number_policy.allows(number):
             raise ServiceError(
                 422,
@@ -97,11 +106,12 @@ class CallManager:
             self._sip_call_started = False
 
         try:
-            prepared = (
-                await self._audio.from_message(message)
-                if message is not None
-                else await self._audio.from_url(audio_url or "")
-            )
+            if message is not None:
+                prepared = await self._audio.from_message(message)
+            elif audio_url is not None:
+                prepared = await self._audio.from_url(audio_url)
+            else:
+                prepared = await self._audio.from_wav_bytes(audio_wav or b"")
         except ServiceError:
             await self._finish(call_id, CallState.FAILED, "audio_preparation_failed")
             raise

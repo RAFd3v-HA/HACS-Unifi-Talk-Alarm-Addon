@@ -76,7 +76,12 @@ responsibility remains with the administrator.
 Supplying `message` uses local `espeak-ng`; `tts_voice` defaults to `de`.
 Supplying `audio_url` instead downloads one uncompressed PCM WAV from an exact
 `allowed_audio_hosts` entry. Redirects, URL credentials and oversized or long
-WAV files are rejected. `ffmpeg` produces a mono 8 kHz signed 16-bit PCM WAV.
+WAV files are rejected. The companion integration may alternatively submit a
+Home Assistant-rendered WAV as bounded `audio_wav_base64`; only the audio, not
+the Home Assistant Cloud credential, reaches this add-on. Exactly one of the
+three sources is accepted. Base64 syntax, request size, decoded size and PCM
+WAV structure are checked before dialing. `ffmpeg` produces a mono 8 kHz signed
+16-bit PCM WAV.
 
 Alarm audio is never selected as the SIP source before `CALL_ESTABLISHED`.
 After EOF the call is ended; WAV duration plus `hangup_buffer_seconds` is the

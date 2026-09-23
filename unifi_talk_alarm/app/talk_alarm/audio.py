@@ -62,6 +62,28 @@ class AudioProcessor:
             shutil.rmtree(directory, ignore_errors=True)
             raise
 
+    async def from_wav_bytes(self, audio_wav: bytes) -> PreparedAudio:
+        """Validate and normalize an in-memory PCM WAV from Home Assistant."""
+        if not audio_wav:
+            raise ServiceError(422, "invalid_audio", "The WAV contains no audio")
+        if len(audio_wav) > self._config.max_audio_bytes:
+            raise ServiceError(413, "audio_too_large", "The WAV exceeds the size limit")
+
+        directory = Path(tempfile.mkdtemp(prefix="talk-alarm-"))
+        source = directory / "uploaded.wav"
+        output = directory / "alarm.wav"
+        try:
+            # The private mkdtemp directory prevents another process from replacing
+            # the exclusive source path before validation.
+            with source.open("xb") as stream:
+                stream.write(audio_wav)
+            self._validate_wav(source, size_limit=self._config.max_audio_bytes)
+            await self._normalize(source, output, invalid_status=422)
+            return self._prepared(output, directory)
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+
     async def from_url(self, audio_url: str) -> PreparedAudio:
         """Download one allowlisted WAV without redirects and normalize it."""
         parsed = urlsplit(audio_url)
@@ -167,10 +189,18 @@ class AudioProcessor:
             )
         except ServiceError:
             raise
-        self._validate_wav(output, require_normalized=True)
+        self._validate_wav(
+            output,
+            size_limit=self._config.max_audio_bytes,
+            require_normalized=True,
+        )
 
     def _prepared(self, output: Path, directory: Path) -> PreparedAudio:
-        duration = self._validate_wav(output, require_normalized=True)
+        duration = self._validate_wav(
+            output,
+            size_limit=self._config.max_audio_bytes,
+            require_normalized=True,
+        )
         return PreparedAudio(path=output, duration=duration, directory=directory)
 
     def _validate_wav(
@@ -181,7 +211,8 @@ class AudioProcessor:
         require_normalized: bool = False,
     ) -> float:
         try:
-            if size_limit is not None and path.stat().st_size > size_limit:
+            file_size = path.stat().st_size
+            if size_limit is not None and file_size > size_limit:
                 raise ServiceError(422, "audio_too_large", "The WAV exceeds the size limit")
             with wave.open(str(path), "rb") as source:
                 if source.getcomptype() != "NONE":
@@ -189,17 +220,28 @@ class AudioProcessor:
                         422, "invalid_audio", "Only uncompressed PCM WAV is supported"
                     )
                 rate = source.getframerate()
-                frames = source.getnframes()
-                if rate <= 0 or frames <= 0:
+                channels = source.getnchannels()
+                sample_width = source.getsampwidth()
+                frame_width = channels * sample_width
+                if rate <= 0 or frame_width <= 0:
                     raise ServiceError(422, "invalid_audio", "The WAV contains no audio")
-                duration = frames / rate
+                # Streaming TTS WAVs may use 0xffffffff for the RIFF/data sizes
+                # because their final length was unknown when the header was sent.
+                # Count the actual bounded PCM bytes instead of trusting getnframes().
+                frame_data = source.readframes((file_size // frame_width) + 1)
+                if not frame_data or len(frame_data) % frame_width:
+                    raise ServiceError(
+                        422, "invalid_audio", "The WAV contains incomplete PCM frames"
+                    )
+                actual_frames = len(frame_data) // frame_width
+                duration = actual_frames / rate
                 if duration > self._config.max_audio_seconds:
                     raise ServiceError(
                         422, "audio_too_long", "The WAV exceeds the duration limit"
                     )
                 if require_normalized and (
-                    source.getnchannels() != 1
-                    or source.getsampwidth() != 2
+                    channels != 1
+                    or sample_width != 2
                     or rate != 8000
                 ):
                     raise ServiceError(
@@ -209,7 +251,7 @@ class AudioProcessor:
         except ServiceError:
             raise
         except (OSError, EOFError, wave.Error) as err:
-            raise ServiceError(422, "invalid_audio", "The downloaded file is not a valid WAV") from err
+            raise ServiceError(422, "invalid_audio", "The file is not a valid WAV") from err
 
     async def _run(
         self,
@@ -238,4 +280,3 @@ class AudioProcessor:
             _LOGGER.warning("Audio helper %s exited with code %s", executable, process.returncode)
             del stderr
             raise ServiceError(status, code, "Audio processing failed")
-

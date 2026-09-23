@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import base64
+from dataclasses import replace
 from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
 from talk_alarm.adapters import AdapterEventType
+from talk_alarm.audio import AudioProcessor
 from talk_alarm.config import AppConfig
-from talk_alarm.manager import CallManager
+from talk_alarm.manager import AudioProvider, CallManager
 from talk_alarm.server import create_app
 
 from fakes import FakeAudioProvider, FakeSipAdapter
 
 
 async def _client(
-    config: AppConfig, adapter: FakeSipAdapter, audio: FakeAudioProvider
+    config: AppConfig, adapter: FakeSipAdapter, audio: AudioProvider
 ) -> tuple[TestClient, CallManager]:
     manager = CallManager(config, adapter, audio)
     client = TestClient(TestServer(create_app(config, manager)))
@@ -44,7 +47,7 @@ async def test_health_requires_constant_bearer_boundary(
             "api_version": "1",
             "service": {
                 "name": "unifi-talk-alarm-sidecar",
-                "version": "0.1.3",
+                "version": "0.2.0",
             },
         }
     finally:
@@ -86,6 +89,181 @@ async def test_audio_starts_only_after_established_and_eof_hangs_up(
         await adapter.emit(AdapterEventType.CALL_CLOSED, "normal")
         _, call = await manager.status()
         assert call.state == "ended"
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_base64_wav_is_decoded_before_media_preparation(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    adapter = FakeSipAdapter()
+    audio = FakeAudioProvider(tmp_path)
+    client, manager = await _client(app_config, adapter, audio)
+    wav = b"RIFF-fake-test-wav"
+    try:
+        response = await client.post(
+            "/api/v1/calls",
+            headers=_headers(),
+            json={
+                "number": "150",
+                "audio_wav_base64": base64.b64encode(wav).decode("ascii"),
+                "ring_timeout": 30,
+            },
+        )
+        assert response.status == 202
+        assert audio.wav_payloads == [wav]
+        assert audio.messages == []
+        assert audio.urls == []
+        assert adapter.dialed == ["150"]
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_call_requires_exactly_one_audio_source(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    adapter = FakeSipAdapter()
+    audio = FakeAudioProvider(tmp_path)
+    client, manager = await _client(app_config, adapter, audio)
+    wav = base64.b64encode(b"fake").decode("ascii")
+    invalid_sources = (
+        {},
+        {"message": "Test", "audio_url": "http://homeassistant.local/test.wav"},
+        {"message": "Test", "audio_wav_base64": wav},
+        {
+            "audio_url": "http://homeassistant.local/test.wav",
+            "audio_wav_base64": wav,
+        },
+        {
+            "message": "Test",
+            "audio_url": "http://homeassistant.local/test.wav",
+            "audio_wav_base64": wav,
+        },
+    )
+    try:
+        for sources in invalid_sources:
+            response = await client.post(
+                "/api/v1/calls",
+                headers=_headers(),
+                json={"number": "150", "ring_timeout": 30, **sources},
+            )
+            assert response.status == 422
+            assert (await response.json())["error"]["code"] == "invalid_audio_source"
+        assert adapter.dialed == []
+        assert audio.messages == []
+        assert audio.urls == []
+        assert audio.wav_payloads == []
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_base64_wav_rejects_non_ascii_whitespace_and_invalid_alphabet(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    adapter = FakeSipAdapter()
+    audio = FakeAudioProvider(tmp_path)
+    client, manager = await _client(app_config, adapter, audio)
+    try:
+        for encoded in ("%%%%", "Zm FrZQ==", "ZmFrZQ==\n", "🔥"):
+            response = await client.post(
+                "/api/v1/calls",
+                headers=_headers(),
+                json={
+                    "number": "150",
+                    "audio_wav_base64": encoded,
+                    "ring_timeout": 30,
+                },
+            )
+            assert response.status == 422
+            assert (await response.json())["error"]["code"] == "invalid_audio"
+        assert audio.wav_payloads == []
+        assert adapter.dialed == []
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_base64_wav_enforces_encoded_and_decoded_limits(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    config = replace(app_config, max_audio_bytes=8)
+    adapter = FakeSipAdapter()
+    audio = FakeAudioProvider(tmp_path)
+    client, manager = await _client(config, adapter, audio)
+    try:
+        # Thirteen encoded bytes exceed the longest Base64 form for eight bytes,
+        # so this is rejected without attempting to decode it.
+        for encoded in (
+            "A" * 13,
+            base64.b64encode(b"123456789").decode("ascii"),
+        ):
+            response = await client.post(
+                "/api/v1/calls",
+                headers=_headers(),
+                json={
+                    "number": "150",
+                    "audio_wav_base64": encoded,
+                    "ring_timeout": 30,
+                },
+            )
+            assert response.status == 413
+            assert (await response.json())["error"]["code"] == "audio_too_large"
+        assert audio.wav_payloads == []
+        assert adapter.dialed == []
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_invalid_wav_is_rejected_before_dial(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    adapter = FakeSipAdapter()
+    client, manager = await _client(app_config, adapter, AudioProcessor(app_config))
+    try:
+        response = await client.post(
+            "/api/v1/calls",
+            headers=_headers(),
+            json={
+                "number": "150",
+                "audio_wav_base64": base64.b64encode(b"not a wave file").decode(
+                    "ascii"
+                ),
+                "ring_timeout": 30,
+            },
+        )
+        assert response.status == 422
+        assert (await response.json())["error"]["code"] == "invalid_audio"
+        assert adapter.dialed == []
+    finally:
+        await manager.shutdown()
+        await client.close()
+
+
+async def test_request_body_limit_tracks_configured_audio_limit(
+    app_config: AppConfig, tmp_path: Path
+) -> None:
+    config = replace(app_config, max_audio_bytes=8)
+    adapter = FakeSipAdapter()
+    audio = FakeAudioProvider(tmp_path)
+    client, manager = await _client(config, adapter, audio)
+    try:
+        response = await client.post(
+            "/api/v1/calls",
+            headers=_headers(),
+            json={
+                "number": "150",
+                "audio_wav_base64": "A" * (66 * 1024),
+                "ring_timeout": 30,
+            },
+        )
+        assert response.status == 413
+        assert (await response.json())["error"]["code"] == "http_error"
+        assert audio.wav_payloads == []
+        assert adapter.dialed == []
     finally:
         await manager.shutdown()
         await client.close()

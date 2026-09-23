@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.0
+
+- Added bounded `audio_wav_base64` call input for WAV audio rendered by Home
+  Assistant, including strict Base64, request-size, PCM WAV, byte and duration
+  validation before dialing.
+- Kept the existing local `message` and allowlisted `audio_url` inputs for API
+  v1 compatibility.
+
 ## 0.1.3
 
 - Fixed alarm audio ending before playback by distinguishing Baresip's WAV
