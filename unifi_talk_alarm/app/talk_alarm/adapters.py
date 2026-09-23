@@ -17,6 +17,18 @@ import wave
 from .config import AppConfig
 
 _LOGGER = logging.getLogger(__name__)
+_DIAGNOSTIC_CALL_EVENTS = frozenset(
+    {
+        "CALL_INCOMING",
+        "CALL_OUTGOING",
+        "CALL_PROGRESS",
+        "CALL_RINGING",
+        "CALL_ANSWERED",
+        "CALL_ESTABLISHED",
+        "CALL_CLOSED",
+    }
+)
+_SIP_STATUS = re.compile(r"^\s*(?:SIP/2\.0\s+)?([1-6][0-9]{2})(?=\s|$)")
 
 
 class AdapterEventType(StrEnum):
@@ -81,7 +93,9 @@ class BaresipCtrlTcpAdapter(SipAdapter):
         self._stdout_task: asyncio.Task[None] | None = None
         self._ctrl_task: asyncio.Task[None] | None = None
         self._event_task: asyncio.Task[None] | None = None
-        self._event_queue: asyncio.Queue[str] = asyncio.Queue(maxsize=256)
+        self._event_queue: asyncio.Queue[str | tuple[str, str, str]] = asyncio.Queue(
+            maxsize=256
+        )
         self._command_lock = asyncio.Lock()
         self._pending: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._lifecycle_lock = asyncio.Lock()
@@ -140,6 +154,7 @@ class BaresipCtrlTcpAdapter(SipAdapter):
             self._cleanup_incoming_audio()
 
     async def dial(self, number: str) -> None:
+        self._last_failure_reason = None
         host = self._format_host(self._config.sip_server)
         target = f"sip:{number}@{host}:{self._config.sip_port}"
         await self._command("dial", target)
@@ -213,11 +228,17 @@ class BaresipCtrlTcpAdapter(SipAdapter):
                 await writer.drain()
                 response = await asyncio.wait_for(future, timeout=5)
             except asyncio.TimeoutError as err:
+                if command in {"dial", "ausrc", "hangup"}:
+                    _LOGGER.warning("Baresip command %s timed out", command)
                 raise RuntimeError("baresip ctrl_tcp response timed out") from err
             finally:
                 self._pending.pop(token, None)
             if response.get("ok") is not True:
+                if command in {"dial", "ausrc", "hangup"}:
+                    _LOGGER.warning("Baresip command %s rejected", command)
                 raise RuntimeError("baresip rejected the ctrl_tcp command")
+            if command in {"dial", "ausrc", "hangup"}:
+                _LOGGER.info("Baresip command %s accepted", command)
             return response
 
     async def _read_process_output(self) -> None:
@@ -283,22 +304,37 @@ class BaresipCtrlTcpAdapter(SipAdapter):
         event = message.get("event")
         if event is True and isinstance(message.get("type"), str):
             event_name = message["type"]
+            event_class = message.get("class")
             parameter = message.get("param")
-            detail = parameter if isinstance(parameter, str) else ""
-            self._queue_event(f"{event_name} {detail}"[:4096])
+            detail = parameter[:4096] if isinstance(parameter, str) else ""
+            if event_class == "call" and event_name in _DIAGNOSTIC_CALL_EVENTS:
+                if event_name == "CALL_CLOSED":
+                    match = _SIP_STATUS.match(detail)
+                    code = match.group(1) if match else "unknown"
+                    _LOGGER.info("Baresip call event CALL_CLOSED sip_code=%s", code)
+                else:
+                    _LOGGER.info("Baresip call event %s", event_name)
+            elif event_class == "other" and event_name in {
+                "CALL_RTPESTAB",
+                "AUDIO_ERROR",
+            }:
+                _LOGGER.info("Baresip media event %s", event_name)
+            self._queue_event(
+                (event_class if isinstance(event_class, str) else "", event_name, detail)
+            )
         elif isinstance(event, str):
             data = message.get("data")
             detail = data if isinstance(data, str) else ""
             self._queue_event(f"{event} {detail}"[:4096])
 
-    def _queue_event(self, line: str) -> None:
+    def _queue_event(self, event: str | tuple[str, str, str]) -> None:
         """Queue events so ctrl_tcp responses can never deadlock behind handlers."""
         if self._event_task is None or self._event_task.done():
             self._event_task = asyncio.create_task(
                 self._event_worker(), name="baresip-events"
             )
         try:
-            self._event_queue.put_nowait(line)
+            self._event_queue.put_nowait(event)
         except asyncio.QueueFull:
             _LOGGER.error("Baresip event queue is full; marking registration unhealthy")
             asyncio.create_task(
@@ -308,9 +344,12 @@ class BaresipCtrlTcpAdapter(SipAdapter):
     async def _event_worker(self) -> None:
         try:
             while True:
-                line = await self._event_queue.get()
+                event = await self._event_queue.get()
                 try:
-                    await self._parse_line(line)
+                    if isinstance(event, tuple):
+                        await self._parse_ctrl_event(*event)
+                    else:
+                        await self._parse_line(event)
                 finally:
                     self._event_queue.task_done()
         except asyncio.CancelledError:
@@ -319,6 +358,50 @@ class BaresipCtrlTcpAdapter(SipAdapter):
     async def wait_for_queued_events(self) -> None:
         """Wait for already queued events; used by deterministic adapter tests."""
         await self._event_queue.join()
+
+    async def _parse_ctrl_event(
+        self, event_class: str, event_name: str, detail: str
+    ) -> None:
+        """Use the exact ctrl_tcp event type, never a substring in its param."""
+        if event_class in {"register", "ua"}:
+            if event_name in {"REGISTER_OK", "REGISTERED"}:
+                await self._emit(AdapterEventType.REGISTERED)
+            elif event_name in {"REGISTER_FAIL", "REGISTER_ERROR"}:
+                await self._emit(
+                    AdapterEventType.REGISTRATION_ERROR, "SIP registration failed"
+                )
+            elif event_name in {"UNREGISTERING", "UNREGISTERED"}:
+                await self._emit(AdapterEventType.UNREGISTERED)
+            return
+
+        if event_class == "audio":
+            if event_name in {"AUDIO_EOF", "END_OF_FILE"}:
+                await self._emit(AdapterEventType.AUDIO_EOF)
+            return
+
+        if event_class != "call":
+            return
+        if event_name == "CALL_INCOMING":
+            await self._emit(AdapterEventType.CALL_INCOMING)
+        elif event_name == "CALL_OUTGOING":
+            await self._emit(AdapterEventType.CALL_DIALING)
+        elif event_name == "CALL_RINGING":
+            await self._emit(AdapterEventType.CALL_RINGING)
+        elif event_name == "CALL_ESTABLISHED":
+            await self._emit(AdapterEventType.CALL_ESTABLISHED)
+        elif event_name == "CALL_CLOSED":
+            match = _SIP_STATUS.match(detail)
+            code = match.group(1) if match else None
+            if code == "486":
+                reason = "busy"
+            elif code == "408" or "NO ANSWER" in detail.upper():
+                reason = "no_answer"
+            elif code is not None and int(code) >= 300:
+                reason = "failed"
+            else:
+                reason = self._last_failure_reason or "normal"
+            self._last_failure_reason = None
+            await self._emit(AdapterEventType.CALL_CLOSED, reason)
 
     async def _parse_line(self, line: str) -> None:
         upper = line.upper()

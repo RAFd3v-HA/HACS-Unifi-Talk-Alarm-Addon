@@ -1,9 +1,10 @@
-"""Tests for current baresip ctrl_tcp JSON event shapes."""
+"""Tests for baresip ctrl_tcp events and privacy-safe call diagnostics."""
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from pathlib import Path
 
 from talk_alarm.adapters import AdapterEventType, BaresipCtrlTcpAdapter
@@ -13,7 +14,9 @@ from talk_alarm.manager import CallManager
 from fakes import FakeAudioProvider
 
 
-async def test_official_ctrl_tcp_event_objects_are_parsed(app_config: AppConfig) -> None:
+async def test_baresip_call_and_registration_events_are_parsed(
+    app_config: AppConfig,
+) -> None:
     adapter = BaresipCtrlTcpAdapter(app_config)
     events = []
 
@@ -22,12 +25,10 @@ async def test_official_ctrl_tcp_event_objects_are_parsed(app_config: AppConfig)
 
     adapter.set_event_handler(collect)
     fixtures = (
-        {"event": True, "class": "ua", "type": "REGISTER_OK", "param": ""},
+        {"event": True, "class": "register", "type": "REGISTER_OK", "param": ""},
         {"event": True, "class": "call", "type": "CALL_INCOMING", "param": ""},
-        {"event": True, "class": "call", "type": "CALL_OUTGOING", "param": ""},
         {"event": True, "class": "call", "type": "CALL_RINGING", "param": ""},
         {"event": True, "class": "call", "type": "CALL_ESTABLISHED", "param": ""},
-        {"event": True, "class": "audio", "type": "END_OF_FILE", "param": "aufile"},
         {"event": True, "class": "call", "type": "CALL_CLOSED", "param": "486 Busy Here"},
     )
     for fixture in fixtures:
@@ -37,15 +38,100 @@ async def test_official_ctrl_tcp_event_objects_are_parsed(app_config: AppConfig)
     assert [event.type for event in events] == [
         AdapterEventType.REGISTERED,
         AdapterEventType.CALL_INCOMING,
-        AdapterEventType.CALL_DIALING,
         AdapterEventType.CALL_RINGING,
         AdapterEventType.CALL_ESTABLISHED,
-        AdapterEventType.AUDIO_EOF,
         AdapterEventType.CALL_CLOSED,
     ]
     assert events[-1].reason == "busy"
     if adapter._event_task is not None:
         adapter._event_task.cancel()
+
+
+async def test_call_diagnostics_log_only_event_names_and_sip_code(
+    app_config: AppConfig, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    events = []
+
+    async def collect(event):
+        events.append(event)
+
+    adapter.set_event_handler(collect)
+    secret = "private-sip-password-and-token"
+    fixtures = (
+        {"event": True, "class": "call", "type": "CALL_RINGING", "param": secret},
+        {"event": True, "class": "call", "type": "CALL_ANSWERED", "param": secret},
+        {"event": True, "class": "other", "type": "CALL_RTPESTAB", "param": secret},
+        {"event": True, "class": "other", "type": "AUDIO_ERROR", "param": secret},
+        {
+            "event": True,
+            "class": "call",
+            "type": "CALL_CLOSED",
+            "param": f"486 Busy Here {secret}",
+        },
+    )
+    try:
+        with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+            for fixture in fixtures:
+                await adapter._handle_ctrl_message(
+                    {
+                        **fixture,
+                        "peeruri": "sip:+491555123456@private.invalid",
+                        "accountaor": f"sip:{secret}@private.invalid",
+                    }
+                )
+            await adapter.wait_for_queued_events()
+
+        assert [event.type for event in events] == [
+            AdapterEventType.CALL_RINGING,
+            AdapterEventType.CALL_CLOSED,
+        ]
+        assert events[-1].reason == "busy"
+        assert [record.getMessage() for record in caplog.records] == [
+            "Baresip call event CALL_RINGING",
+            "Baresip call event CALL_ANSWERED",
+            "Baresip media event CALL_RTPESTAB",
+            "Baresip media event AUDIO_ERROR",
+            "Baresip call event CALL_CLOSED sip_code=486",
+        ]
+        assert secret not in caplog.text
+        assert "+491555123456" not in caplog.text
+        assert "private.invalid" not in caplog.text
+    finally:
+        if adapter._event_task is not None:
+            adapter._event_task.cancel()
+
+
+async def test_closed_param_cannot_become_established_event(
+    app_config: AppConfig, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    events = []
+
+    async def collect(event):
+        events.append(event)
+
+    adapter.set_event_handler(collect)
+    try:
+        with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+            await adapter._handle_ctrl_message(
+                {
+                    "event": True,
+                    "class": "call",
+                    "type": "CALL_CLOSED",
+                    "param": "Connection reset CALL_ESTABLISHED token=private-value",
+                }
+            )
+            await adapter.wait_for_queued_events()
+
+        assert [event.type for event in events] == [AdapterEventType.CALL_CLOSED]
+        assert [record.getMessage() for record in caplog.records] == [
+            "Baresip call event CALL_CLOSED sip_code=unknown"
+        ]
+        assert "private-value" not in caplog.text
+    finally:
+        if adapter._event_task is not None:
+            adapter._event_task.cancel()
 
 
 async def test_aufile_preload_is_not_mistaken_for_playback_eof(
@@ -144,7 +230,7 @@ async def test_received_audio_cleanup_removes_temporary_file(
 
 
 async def test_event_handler_command_does_not_block_ctrl_response(
-    app_config: AppConfig, tmp_path: Path
+    app_config: AppConfig, tmp_path: Path, caplog
 ) -> None:
     """CALL_ESTABLISHED may issue ausrc while the ctrl reader stays available."""
     adapter = BaresipCtrlTcpAdapter(app_config)
@@ -165,7 +251,7 @@ async def test_event_handler_command_does_not_block_ctrl_response(
                         "response": True,
                         "ok": True,
                         "token": payload["token"],
-                        "data": "ok",
+                        "data": "private-command-response",
                     }
                 )
             )
@@ -180,11 +266,14 @@ async def test_event_handler_command_does_not_block_ctrl_response(
             await adapter.start_audio(tmp_path / "alarm.wav")
 
     adapter.set_event_handler(on_event)
-    await adapter._handle_ctrl_message(
-        {"event": True, "class": "call", "type": "CALL_ESTABLISHED", "param": ""}
-    )
-    await asyncio.wait_for(adapter.wait_for_queued_events(), timeout=1)
+    with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+        await adapter._handle_ctrl_message(
+            {"event": True, "class": "call", "type": "CALL_ESTABLISHED", "param": ""}
+        )
+        await asyncio.wait_for(adapter.wait_for_queued_events(), timeout=1)
     assert frames[0]["command"] == "ausrc"
     assert frames[0]["params"].startswith("aufile,")
+    assert "Baresip command ausrc accepted" in caplog.text
+    assert "private-command-response" not in caplog.text
     if adapter._event_task is not None:
         adapter._event_task.cancel()

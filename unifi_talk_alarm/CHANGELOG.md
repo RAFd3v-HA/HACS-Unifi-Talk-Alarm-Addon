@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.1
+
+- Added privacy-safe SIP event and command-result diagnostics to the add-on log,
+  including a SIP status code on call closure when available.
+- Parse structured Baresip call events by exact event type so a call-close reason
+  cannot be mistaken for a connected call.
+
 ## 0.2.0
 
 - Added bounded `audio_wav_base64` call input for WAV audio rendered by Home

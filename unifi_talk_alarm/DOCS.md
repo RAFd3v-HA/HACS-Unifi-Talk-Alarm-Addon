@@ -87,6 +87,19 @@ Alarm audio is never selected as the SIP source before `CALL_ESTABLISHED`.
 After EOF the call is ended; WAV duration plus `hangup_buffer_seconds` is the
 fallback when baresip emits no EOF event.
 
+## Call diagnostics
+
+With `log_level: info`, the add-on's **Log** tab shows the ordered Baresip call
+events (`CALL_RINGING`, `CALL_ANSWERED`, `CALL_ESTABLISHED`, `CALL_CLOSED`),
+media events (`CALL_RTPESTAB`, `AUDIO_ERROR`), and, when available, a
+three-digit `sip_code` on closure. `CALL_ANSWERED` alone does not start alarm
+audio; playback begins only after `CALL_ESTABLISHED`. The log does not include
+numbers, SIP URIs, passwords, API tokens, or raw SIP reasons. For a failed
+test call, copy the lines beginning `Baresip call event`, `Baresip media event`
+and `Baresip command` from that test only.
+`AUDIO_ERROR` can also occur when WAV playback reaches its normal end, so its
+presence alone does not prove an audio fault.
+
 ## Limits
 
 Only one outbound call can be active. Calls are not queued or retried. The

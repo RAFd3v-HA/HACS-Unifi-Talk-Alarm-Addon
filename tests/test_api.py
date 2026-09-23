@@ -8,6 +8,7 @@ from pathlib import Path
 
 from aiohttp.test_utils import TestClient, TestServer
 
+from talk_alarm import __version__
 from talk_alarm.adapters import AdapterEventType
 from talk_alarm.audio import AudioProcessor
 from talk_alarm.config import AppConfig
@@ -47,7 +48,7 @@ async def test_health_requires_constant_bearer_boundary(
             "api_version": "1",
             "service": {
                 "name": "unifi-talk-alarm-sidecar",
-                "version": "0.2.0",
+                "version": __version__,
             },
         }
     finally:
