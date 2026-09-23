@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.3
+
+- Restore Baresip's persistent silence source before every dial so a second
+  call cannot reuse the first call's deleted temporary alarm WAV.
+- Abort a call when Baresip reports that an audio-source switch failed, even
+  when its control response otherwise reports success.
+- Reject audio-source paths that exceed Baresip's device field instead of
+  silently truncating them.
+- Classify missing-file call closures and WAV-open warnings without printing
+  the path or the raw Baresip output.
+
 ## 0.2.2
 
 - Added privacy-safe categories for Baresip call-close reasons, SDP/audio

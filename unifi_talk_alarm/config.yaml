@@ -1,5 +1,5 @@
 name: UniFi Talk Alarm Add-on
-version: "0.2.2"
+version: "0.2.3"
 slug: unifi_talk_alarm
 description: Places authenticated alarm calls through a dedicated UniFi Talk SIP extension
 url: https://github.com/RAFd3v-HA/HACS-Unifi-Talk-Alarm-Addon

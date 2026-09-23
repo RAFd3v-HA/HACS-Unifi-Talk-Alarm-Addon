@@ -35,6 +35,7 @@ _CLOSE_CAUSES = {
     "local timeout": "local_timeout",
     "mediaenc failed": "media_encryption_failed",
     "no audio codecs": "codec_mismatch",
+    "no such file or directory": "file_not_found",
     "rtp stream error": "rtp_stream_error",
     "wrong address family": "address_family_error",
 }
@@ -51,6 +52,7 @@ _PROCESS_CAUSES = (
     ("audio: alloc encoder:", "audio_encoder_failed"),
     ("audio: start_source failed (", "audio_source_start_failed"),
     ("audio: start_player failed (", "audio_player_start_failed"),
+    ("aufile: failed to open file '", "audio_source_file_open_failed"),
 )
 
 
@@ -200,6 +202,11 @@ class BaresipCtrlTcpAdapter(SipAdapter):
 
     async def dial(self, number: str) -> None:
         self._last_failure_reason = None
+        # The menu's ausrc command changes Baresip's global default. Restore the
+        # persistent source before creating a call: the previous alarm WAV is
+        # temporary and may already have been removed by CallManager._finish.
+        silence = self._config.baresip_config_dir / "silence.wav"
+        await self._command("ausrc", self._aufile_source_parameter(silence))
         host = self._format_host(self._config.sip_server)
         target = f"sip:{number}@{host}:{self._config.sip_port}"
         await self._command("dial", target)
@@ -209,10 +216,17 @@ class BaresipCtrlTcpAdapter(SipAdapter):
 
     async def start_audio(self, path: Path) -> None:
         """Switch from silence to alarm WAV only after CALL_ESTABLISHED."""
-        resolved = path.resolve()
-        if "\n" in str(resolved) or "\r" in str(resolved):
-            raise RuntimeError("Unsafe audio path")
-        await self._command("ausrc", f"aufile,{resolved}")
+        await self._command("ausrc", self._aufile_source_parameter(path))
+
+    @staticmethod
+    def _aufile_source_parameter(path: Path) -> str:
+        """Keep Baresip's fixed-size audio-device field intact and private."""
+        resolved = str(path.resolve())
+        if any(character in resolved for character in "\r\n\x00") or len(
+            resolved.encode("utf-8")
+        ) >= 128:
+            raise RuntimeError("Unsafe or too long audio source path")
+        return f"aufile,{resolved}"
 
     async def cleanup_call_audio(self) -> None:
         """Remove received audio that baresip temporarily wrote for the call."""
@@ -284,17 +298,19 @@ class BaresipCtrlTcpAdapter(SipAdapter):
                 raise RuntimeError("baresip rejected the ctrl_tcp command")
             if command == "ausrc":
                 data = response.get("data")
-                if isinstance(data, str) and any(
-                    marker in data.lower()
+                normalized = data.strip().lower() if isinstance(data, str) else ""
+                if any(
+                    marker in normalized
                     for marker in (
                         "failed to set audio-source",
                         "no such audio-source",
                         "no such device for",
                         "no config object",
+                        "format should be:",
                     )
-                ):
+                ) or not normalized.startswith("switch audio device: "):
                     _LOGGER.warning("Baresip command ausrc source_switch_failed")
-                    return response
+                    raise RuntimeError("baresip could not switch the audio source")
             if command in {"dial", "ausrc", "hangup"}:
                 _LOGGER.info("Baresip command %s accepted", command)
             return response

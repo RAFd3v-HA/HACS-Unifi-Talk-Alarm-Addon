@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import pytest
 
@@ -155,6 +156,7 @@ async def test_closed_param_cannot_become_established_event(
         ("mediaenc failed", "media_encryption_failed"),
         ("mediaenc failed I/O error", "media_encryption_failed"),
         ("Wrong address family", "address_family_error"),
+        ("No such file or directory", "file_not_found"),
         ("486 Busy Here", "sip_response"),
         ("Protocol error sip:+491555123456@private.invalid", "unclassified"),
     ),
@@ -193,6 +195,9 @@ def test_process_warning_diagnostics_never_log_raw_output(
         adapter._log_process_diagnostic(
             f"call: mnatconn: could not start audio: {secret}"
         )
+        adapter._log_process_diagnostic(
+            f"aufile: failed to open file '{secret}': No such file or directory"
+        )
         adapter._log_process_diagnostic(f"call: unrelated warning {secret}")
 
     assert [record.getMessage() for record in caplog.records] == [
@@ -200,6 +205,7 @@ def test_process_warning_diagnostics_never_log_raw_output(
         "Baresip diagnostic cause=audio_decoder_failed",
         "Baresip diagnostic cause=audio_start_failed",
         "Baresip diagnostic cause=audio_start_failed",
+        "Baresip diagnostic cause=audio_source_file_open_failed",
     ]
     assert secret not in caplog.text
 
@@ -263,7 +269,7 @@ async def test_aufile_preload_is_not_mistaken_for_playback_eof(
 
 
 async def test_aufile_preload_keeps_connected_call_alive(
-    app_config: AppConfig, tmp_path: Path
+    app_config: AppConfig,
 ) -> None:
     """The source preload marker must not hang up an established call."""
     adapter = BaresipCtrlTcpAdapter(app_config)
@@ -274,8 +280,10 @@ async def test_aufile_preload_keeps_connected_call_alive(
         return {"response": True, "ok": True, "data": ""}
 
     adapter._command = command
+    object.__setattr__(app_config, "baresip_config_dir", Path("/tmp/talk-test"))
+    short_audio_root = TemporaryDirectory(prefix="talk-test-", dir="/tmp")
     manager = CallManager(
-        app_config, adapter, FakeAudioProvider(tmp_path, duration=60.0)
+        app_config, adapter, FakeAudioProvider(Path(short_audio_root.name), duration=60.0)
     )
     try:
         await manager.start_call(
@@ -296,6 +304,7 @@ async def test_aufile_preload_keeps_connected_call_alive(
         assert [name for name, _ in commands].count("hangup") == 1
     finally:
         await manager.shutdown()
+        short_audio_root.cleanup()
 
 
 async def test_generated_baresip_configuration_is_single_call_and_ephemeral(
@@ -338,8 +347,106 @@ async def test_received_audio_cleanup_removes_temporary_file(
     assert not incoming.exists()
 
 
-async def test_event_handler_command_does_not_block_ctrl_response(
+async def test_each_dial_resets_stale_audio_source_before_call(
+    app_config: AppConfig,
+) -> None:
+    """A previous call's temporary WAV must not become the next call's source."""
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    commands: list[tuple[str, str]] = []
+
+    async def command(name: str, params: str = "") -> dict:
+        commands.append((name, params))
+        return {"response": True, "ok": True, "data": ""}
+
+    adapter._command = command
+    object.__setattr__(app_config, "baresip_config_dir", Path("/tmp/talk-test"))
+    first_audio = Path("/tmp/first.wav")
+    second_audio = Path("/tmp/second.wav")
+
+    await adapter.dial("150")
+    await adapter.start_audio(first_audio)
+    await adapter.dial("151")
+    await adapter.start_audio(second_audio)
+
+    silence = f"aufile,{(app_config.baresip_config_dir / 'silence.wav').resolve()}"
+    assert commands == [
+        ("ausrc", silence),
+        ("dial", "sip:150@192.168.1.1:5060"),
+        ("ausrc", f"aufile,{first_audio.resolve()}"),
+        ("ausrc", silence),
+        ("dial", "sip:151@192.168.1.1:5060"),
+        ("ausrc", f"aufile,{second_audio.resolve()}"),
+    ]
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        {"ok": False, "data": ""},
+        {"ok": True, "data": "failed to set audio-source (private-reason)"},
+        {"ok": True, "data": ""},
+    ),
+)
+async def test_failed_silence_reset_never_dials(
+    app_config: AppConfig, response: dict, caplog
+) -> None:
+    """Even an ok=true ctrl response may report a failed source switch."""
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    object.__setattr__(app_config, "baresip_config_dir", Path("/tmp/talk-test"))
+    frames: list[dict] = []
+
+    class FakeWriter:
+        def is_closing(self) -> bool:
+            return False
+
+        def write(self, frame: bytes) -> None:
+            colon = frame.index(b":")
+            length = int(frame[:colon])
+            payload = json.loads(frame[colon + 1 : colon + 1 + length])
+            frames.append(payload)
+            asyncio.create_task(
+                adapter._handle_ctrl_message(
+                    {"response": True, "token": payload["token"], **response}
+                )
+            )
+
+        async def drain(self) -> None:
+            await asyncio.sleep(0)
+
+    adapter._ctrl_writer = FakeWriter()
+    with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+        with pytest.raises(RuntimeError):
+            await adapter.dial("150")
+
+    assert [frame["command"] for frame in frames] == ["ausrc"]
+    assert frames[0]["params"] == (
+        f"aufile,{(app_config.baresip_config_dir / 'silence.wav').resolve()}"
+    )
+    assert "private-reason" not in caplog.text
+
+
+async def test_long_audio_source_path_is_rejected_before_ctrl_command(
     app_config: AppConfig, tmp_path: Path, caplog
+) -> None:
+    adapter = BaresipCtrlTcpAdapter(app_config)
+    commands: list[tuple[str, str]] = []
+
+    async def command(name: str, params: str = "") -> dict:
+        commands.append((name, params))
+        return {"response": True, "ok": True, "data": ""}
+
+    adapter._command = command
+    private_path = tmp_path / ("private-password-" + "x" * 128 + ".wav")
+    with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
+        with pytest.raises(RuntimeError):
+            await adapter.start_audio(private_path)
+
+    assert commands == []
+    assert "private-password" not in caplog.text
+
+
+async def test_event_handler_command_does_not_block_ctrl_response(
+    app_config: AppConfig, caplog
 ) -> None:
     """CALL_ESTABLISHED may issue ausrc while the ctrl reader stays available."""
     adapter = BaresipCtrlTcpAdapter(app_config)
@@ -360,7 +467,10 @@ async def test_event_handler_command_does_not_block_ctrl_response(
                         "response": True,
                         "ok": True,
                         "token": payload["token"],
-                        "data": "private-command-response",
+                        "data": (
+                            "switch audio device: "
+                            "aufile,/tmp/private-command-response.wav"
+                        ),
                     }
                 )
             )
@@ -372,7 +482,7 @@ async def test_event_handler_command_does_not_block_ctrl_response(
 
     async def on_event(event):
         if event.type == AdapterEventType.CALL_ESTABLISHED:
-            await adapter.start_audio(tmp_path / "alarm.wav")
+            await adapter.start_audio(Path("/tmp/alarm.wav"))
 
     adapter.set_event_handler(on_event)
     with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
@@ -389,10 +499,10 @@ async def test_event_handler_command_does_not_block_ctrl_response(
 
 
 async def test_ausrc_response_failure_is_logged_without_path_or_reason(
-    app_config: AppConfig, tmp_path: Path, caplog
+    app_config: AppConfig, caplog
 ) -> None:
     adapter = BaresipCtrlTcpAdapter(app_config)
-    private_path = tmp_path / "private-password.wav"
+    private_path = Path("/tmp/private-password.wav")
 
     class FakeWriter:
         def is_closing(self) -> bool:
@@ -421,7 +531,8 @@ async def test_ausrc_response_failure_is_logged_without_path_or_reason(
 
     adapter._ctrl_writer = FakeWriter()
     with caplog.at_level(logging.INFO, logger="talk_alarm.adapters"):
-        await adapter.start_audio(private_path)
+        with pytest.raises(RuntimeError):
+            await adapter.start_audio(private_path)
 
     assert [record.getMessage() for record in caplog.records] == [
         "Baresip command ausrc source_switch_failed"
